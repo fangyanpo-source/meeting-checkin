@@ -8,7 +8,7 @@ import json
 # ==========================================
 # 1. 頁面與基本設定
 # ==========================================
-st.set_page_config(page_title="會議報到工作站", page_icon="📱", layout="centered")
+st.set_page_config(page_title="社會處活動報到系統", page_icon="📱", layout="centered")
 
 hide_st_style = """
             <style>
@@ -79,21 +79,33 @@ col3.metric("報到率", f"{check_in_rate:.0f}%")
 
 st.divider()
 
+# 初始化搜尋欄的 Session State
+if 'search_term' not in st.session_state:
+    st.session_state.search_term = ""
+
 # ==========================================
 # 5. 三大功能分頁
 # ==========================================
 tab_checkin, tab_manage, tab_add = st.tabs(["📱 快速報到", "📋 名單管理", "➕ 臨時新增"])
 
 # ------------------------------------------
-# 分頁 A：快速報到 (智慧搜尋 + 無縫下拉選單)
+# 分頁 A：快速報到 (含一鍵清除搜尋功能)
 # ------------------------------------------
 with tab_checkin:
     if not df.empty:
-        # 新增快速搜尋列
-        search_mode = st.text_input("🔍 快速搜尋 (輸入姓名或單位)", placeholder="輸入關鍵字直接尋找人員...")
+        # 使用 columns 來排版：左邊是輸入框，右邊是清除按鈕 (對齊底部)
+        col_search, col_clear = st.columns([8, 2], vertical_alignment="bottom")
+        
+        with col_search:
+            search_mode = st.text_input("🔍 快速搜尋 (輸入姓名或單位)", key="search_term", placeholder="輸入關鍵字...")
+        with col_clear:
+            if st.button("✖ 清除", use_container_width=True):
+                st.session_state.search_term = "" # 清空文字
+                st.rerun() # 立即刷新畫面
+                
         st.caption("或使用下方選單挑選：")
         
-        # 邏輯分流：如果有輸入關鍵字，優先顯示搜尋結果；若無，顯示單位下拉選單
+        # 邏輯分流：如果有輸入關鍵字，優先顯示搜尋結果
         if search_mode:
             search_df = df[df['姓名'].astype(str).str.contains(search_mode) | 
                            df['單位'].astype(str).str.contains(search_mode)]
@@ -112,16 +124,16 @@ with tab_checkin:
                                 sheet.update_cell(index + 2, 4, "TRUE")
                                 sheet.update_cell(index + 2, 5, current_time)
                                 st.session_state.attendees = load_data()
+                                st.session_state.search_term = "" # 簽到成功後自動清空搜尋欄
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"寫入雲端失敗：{e}")
                     st.divider()
         else:
-            # 原本的無縫下拉選單邏輯
+            # 單位與姓名下拉選單
             units = sorted(df['單位'].astype(str).unique())
             selected_unit = st.selectbox("1️⃣ 請選擇單位", options=["-- 請選擇 --"] + units)
             
-            # 跳過確認按鈕，選完單位直接出現姓名選單
             if selected_unit != "-- 請選擇 --":
                 unit_df = df[df['單位'] == selected_unit]
                 names = unit_df['姓名'].astype(str).tolist()
@@ -163,15 +175,13 @@ with tab_checkin:
                         st.button("✅ 此人已完成報到", disabled=True, use_container_width=True)
 
 # ------------------------------------------
-# 分頁 B：名單管理 (僅顯示已報到，附確認勾選框)
+# 分頁 B：名單管理 (預設不打勾，勾選即撤銷)
 # ------------------------------------------
 with tab_manage:
-    st.caption("☑️ 以下僅顯示**已報到**人員。若需撤銷報到，請取消右方勾選。")
+    st.caption("☑️ 以下為**已報到**人員。若需「撤銷報到」，請將右方框框打勾。")
     
-    # 篩選出已經報到的人員
     checked_in_df = df[df['報到狀態'] == True]
     
-    # 仍保留搜尋功能，方便在大量已報到名單中找人
     search_manage = st.text_input("🔍 搜尋已報到名單", key="manage_search")
     if search_manage:
         checked_in_df = checked_in_df[checked_in_df['姓名'].astype(str).str.contains(search_manage) | 
@@ -188,15 +198,16 @@ with tab_manage:
             st.caption(f"🕒 報到時間：{row['報到時間']}")
             
         with col_checkbox:
-            # 建立一個預設為打勾狀態的 checkbox
-            is_checked = st.checkbox("報到", value=True, key=f"cb_{index}", label_visibility="collapsed")
+            # 預設為 False (沒有打勾)，標籤設為「取消」
+            cancel_checked = st.checkbox("取消", value=False, key=f"cb_cancel_{index}")
             
-            # 當工作人員將勾選取消時，觸發撤銷報到邏輯
-            if not is_checked:
+            # 當管理員手動打勾時，觸發撤銷報到動作
+            if cancel_checked:
                 try:
                     sheet.update_cell(index + 2, 4, "FALSE")
                     sheet.update_cell(index + 2, 5, "")
                     st.session_state.attendees = load_data()
+                    st.toast(f"⚠️ 已撤銷 {row['姓名']} 的報到紀錄")
                     st.rerun()
                 except Exception as e:
                     st.error(f"撤銷失敗：{e}")
