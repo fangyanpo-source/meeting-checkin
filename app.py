@@ -8,7 +8,7 @@ import json
 # ==========================================
 # 1. 頁面與基本設定
 # ==========================================
-st.set_page_config(page_title="社會處活動報到系統", page_icon="📱", layout="centered")
+st.set_page_config(page_title="會議報到工作站", page_icon="📱", layout="centered")
 
 hide_st_style = """
             <style>
@@ -63,7 +63,7 @@ df = st.session_state.attendees
 # ==========================================
 # 4. 頂部儀表板
 # ==========================================
-st.title("📱 社會處活動報到系統")
+st.title("📱 會議報到系統")
 
 if not df.empty:
     total_people = len(df)
@@ -89,23 +89,24 @@ if 'search_term' not in st.session_state:
 tab_checkin, tab_manage, tab_add = st.tabs(["📱 快速報到", "📋 名單管理", "➕ 臨時新增"])
 
 # ------------------------------------------
-# 分頁 A：快速報到 (含一鍵清除搜尋功能)
+# 分頁 A：快速報到 
 # ------------------------------------------
 with tab_checkin:
     if not df.empty:
-        # 使用 columns 來排版：左邊是輸入框，右邊是清除按鈕 (對齊底部)
+        # 💡 解法：建立一個專屬的 callback 函式來清空搜尋文字
+        def clear_search():
+            st.session_state.search_term = ""
+
         col_search, col_clear = st.columns([8, 2], vertical_alignment="bottom")
         
         with col_search:
             search_mode = st.text_input("🔍 快速搜尋 (輸入姓名或單位)", key="search_term", placeholder="輸入關鍵字...")
         with col_clear:
-            if st.button("✖ 清除", use_container_width=True):
-                st.session_state.search_term = "" # 清空文字
-                st.rerun() # 立即刷新畫面
+            # 💡 將 callback 函式綁定到按鈕的 on_click 事件上，完美避開報錯
+            st.button("✖ 清除", on_click=clear_search, use_container_width=True)
                 
         st.caption("或使用下方選單挑選：")
         
-        # 邏輯分流：如果有輸入關鍵字，優先顯示搜尋結果
         if search_mode:
             search_df = df[df['姓名'].astype(str).str.contains(search_mode) | 
                            df['單位'].astype(str).str.contains(search_mode)]
@@ -124,13 +125,13 @@ with tab_checkin:
                                 sheet.update_cell(index + 2, 4, "TRUE")
                                 sheet.update_cell(index + 2, 5, current_time)
                                 st.session_state.attendees = load_data()
-                                st.session_state.search_term = "" # 簽到成功後自動清空搜尋欄
+                                # 💡 這裡移除自動清空搜尋欄的邏輯，保留搜尋結果方便連續簽到
+                                st.toast(f"✅ {row['姓名']} 報到成功！", icon="✅")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"寫入雲端失敗：{e}")
                     st.divider()
         else:
-            # 單位與姓名下拉選單
             units = sorted(df['單位'].astype(str).unique())
             selected_unit = st.selectbox("1️⃣ 請選擇單位", options=["-- 請選擇 --"] + units)
             
@@ -167,7 +168,7 @@ with tab_checkin:
                                 sheet.update_cell(person_index + 2, 5, current_time)
                                 
                                 st.session_state.attendees = load_data()
-                                st.success(f"✅ {final_name} 報到成功！")
+                                st.toast(f"✅ {final_name} 報到成功！", icon="✅")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"寫入雲端失敗：{e}")
@@ -198,10 +199,8 @@ with tab_manage:
             st.caption(f"🕒 報到時間：{row['報到時間']}")
             
         with col_checkbox:
-            # 預設為 False (沒有打勾)，標籤設為「取消」
             cancel_checked = st.checkbox("取消", value=False, key=f"cb_cancel_{index}")
             
-            # 當管理員手動打勾時，觸發撤銷報到動作
             if cancel_checked:
                 try:
                     sheet.update_cell(index + 2, 4, "FALSE")
