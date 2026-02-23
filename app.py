@@ -63,7 +63,7 @@ df = st.session_state.attendees
 # ==========================================
 # 4. 頂部儀表板
 # ==========================================
-st.title("📱 會議報到系統")
+st.title("📱 社會處活動報到系統")
 
 if not df.empty:
     total_people = len(df)
