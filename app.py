@@ -1,0 +1,133 @@
+import json
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+import gspread
+from google.oauth2.service_account import Credentials
+
+# ==========================================
+# 1. 頁面與基本設定
+# ==========================================
+st.set_page_config(page_title="會議報到工作站", page_icon="📋", layout="centered")
+
+# ==========================================
+# 2. 連線 Google Sheets (使用快取避免重複連線)
+# ==========================================
+@st.cache_resource
+def init_gsheets():
+    # 設定存取範圍
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+secret_dict = json.loads(st.secrets["gcp_json"])
+    creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
+    client = gspread.authorize(creds)
+    
+    # 記得把這裡的 ID 換成你剛剛測試成功的「試算表 ID」
+    sheet = client.open_by_key("活動報到名單").sheet1
+    return sheet
+
+sheet = init_gsheets()
+
+# ==========================================
+# 3. 讀取與初始化資料
+# ==========================================
+def load_data():
+    # 從雲端抓取所有資料
+    records = sheet.get_all_records()
+    df = pd.DataFrame(records)
+    
+    # 確保「報到狀態」欄位被正確轉換為布林值 (True/False)
+    if not df.empty and '報到狀態' in df.columns:
+        df['報到狀態'] = df['報到狀態'].astype(str).str.upper() == 'TRUE'
+    return df
+
+# 首次載入或點擊右上角重整時，抓取雲端資料
+if 'attendees' not in st.session_state:
+    st.session_state.attendees = load_data()
+
+# ==========================================
+# 4. 頂部儀表板：報到統計
+# ==========================================
+st.title("📋 現場會議報到")
+
+# 計算統計數據
+df = st.session_state.attendees
+if not df.empty:
+    total_people = len(df)
+    checked_in_people = df['報到狀態'].sum()
+    check_in_rate = (checked_in_people / total_people) * 100 if total_people > 0 else 0
+else:
+    total_people = checked_in_people = check_in_rate = 0
+
+col_stat1, col_stat2, col_stat3 = st.columns(3)
+col_stat1.metric("總人數", f"{total_people} 人")
+col_stat2.metric("已報到", f"{checked_in_people} 人")
+col_stat3.metric("報到率", f"{check_in_rate:.1f} %")
+
+st.divider()
+
+# ==========================================
+# 5. 搜尋與篩選區
+# ==========================================
+search_term = st.text_input("🔍 快速搜尋：請輸入姓名或單位", placeholder="例如：資訊部 或 王大明")
+tab1, tab2, tab3 = st.tabs(["全部名單", "⏳ 尚未報到", "✅ 已報到"])
+
+if search_term and not df.empty:
+    df = df[df['姓名'].astype(str).str.contains(search_term) | df['單位'].astype(str).str.contains(search_term)]
+
+# ==========================================
+# 6. 渲染名單列表函式 (含雲端寫入邏輯)
+# ==========================================
+def render_list(data_frame, prefix):
+    if data_frame.empty:
+        st.info("沒有找到符合條件的人員，或試算表目前為空。")
+        return
+
+    for index, row in data_frame.iterrows():
+        col_info, col_action = st.columns([6, 4], vertical_alignment="center")
+        
+        with col_info:
+            st.markdown(f"**{row['姓名']}** |  {row['單位']}")
+            if row['報到狀態']:
+                st.caption(f"🕒 報到時間：{row['報到時間']}")
+            else:
+                st.caption("🔴 未報到")
+                
+        with col_action:
+            if not row['報到狀態']:
+                if st.button("👉 點此簽到", key=f"checkin_{prefix}_{index}", use_container_width=True, type="primary"):
+                    current_time = datetime.now().strftime("%H:%M:%S")
+                    
+                    # --- 1. 更新 Google Sheets 雲端資料 ---
+                    # 試算表有標題列(佔1列)，且 Pandas index 從 0 開始，所以雲端實際列數 = index + 2
+                    # 假設 C 欄(第3欄)為報到狀態，D 欄(第4欄)為報到時間
+                    try:
+                        sheet.update_cell(index + 2, 3, "TRUE")
+                        sheet.update_cell(index + 2, 4, current_time)
+                        
+                        # --- 2. 更新本地端 Session State ---
+                        st.session_state.attendees.at[index, '報到狀態'] = True
+                        st.session_state.attendees.at[index, '報到時間'] = current_time
+                        
+                        # 顯示成功提示並重新整理畫面
+                        st.toast(f"✅ {row['姓名']} 報到成功！已同步至雲端", icon="✅")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"寫入雲端失敗，請確認網路連線或金鑰權限。錯誤代碼：{e}")
+            else:
+                st.button("已完成", key=f"done_{prefix}_{index}", disabled=True, use_container_width=True)
+        
+        st.divider()
+
+# ==========================================
+# 7. 在不同頁籤中顯示對應資料
+# ==========================================
+if not df.empty:
+    with tab1:
+        render_list(df, prefix="all")
+    with tab2:
+        render_list(df[df['報到狀態'] == False], prefix="pending")
+    with tab3:
+        render_list(df[df['報到狀態'] == True], prefix="completed")
