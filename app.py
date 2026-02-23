@@ -93,7 +93,6 @@ tab_checkin, tab_manage, tab_add = st.tabs(["📱 快速報到", "📋 名單管
 # ------------------------------------------
 with tab_checkin:
     if not df.empty:
-        # 💡 解法：建立一個專屬的 callback 函式來清空搜尋文字
         def clear_search():
             st.session_state.search_term = ""
 
@@ -102,7 +101,6 @@ with tab_checkin:
         with col_search:
             search_mode = st.text_input("🔍 快速搜尋 (輸入姓名或單位)", key="search_term", placeholder="輸入關鍵字...")
         with col_clear:
-            # 💡 將 callback 函式綁定到按鈕的 on_click 事件上，完美避開報錯
             st.button("✖ 清除", on_click=clear_search, use_container_width=True)
                 
         st.caption("或使用下方選單挑選：")
@@ -125,7 +123,6 @@ with tab_checkin:
                                 sheet.update_cell(index + 2, 4, "TRUE")
                                 sheet.update_cell(index + 2, 5, current_time)
                                 st.session_state.attendees = load_data()
-                                # 💡 這裡移除自動清空搜尋欄的邏輯，保留搜尋結果方便連續簽到
                                 st.toast(f"✅ {row['姓名']} 報到成功！", icon="✅")
                                 st.rerun()
                             except Exception as e:
@@ -176,10 +173,10 @@ with tab_checkin:
                         st.button("✅ 此人已完成報到", disabled=True, use_container_width=True)
 
 # ------------------------------------------
-# 分頁 B：名單管理 (預設不打勾，勾選即撤銷)
+# 分頁 B：名單管理 (預設打勾，取消勾選即撤銷)
 # ------------------------------------------
 with tab_manage:
-    st.caption("☑️ 以下為**已報到**人員。若需「撤銷報到」，請將右方框框打勾。")
+    st.caption("☑️ 以下為**已報到**人員。若需「撤銷報到」，請**取消勾選**右方框框。")
     
     checked_in_df = df[df['報到狀態'] == True]
     
@@ -199,9 +196,11 @@ with tab_manage:
             st.caption(f"🕒 報到時間：{row['報到時間']}")
             
         with col_checkbox:
-            cancel_checked = st.checkbox("取消", value=False, key=f"cb_cancel_{index}")
+            # 💡 預設為 True (已打勾狀態)，並隱藏標籤文字讓畫面更俐落
+            is_checked = st.checkbox("已報到", value=True, key=f"cb_status_{index}", label_visibility="collapsed")
             
-            if cancel_checked:
+            # 💡 當管理員將勾勾「取消」時，觸發撤銷邏輯
+            if not is_checked:
                 try:
                     sheet.update_cell(index + 2, 4, "FALSE")
                     sheet.update_cell(index + 2, 5, "")
