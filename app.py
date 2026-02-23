@@ -1,9 +1,9 @@
-import json
 import streamlit as st
 import pandas as pd
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
+import json  # 雲端讀取金鑰必備
 
 # ==========================================
 # 1. 頁面與基本設定
@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="會議報到工作站", page_icon="📋", layout="centered")
 
 # ==========================================
-# 2. 連線 Google Sheets (使用快取避免重複連線)
+# 2. 連線 Google Sheets (雲端安全版)
 # ==========================================
 @st.cache_resource
 def init_gsheets():
@@ -20,13 +20,19 @@ def init_gsheets():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-secret_dict = json.loads(st.secrets["gcp_json"])
-    creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
-    client = gspread.authorize(creds)
     
-    # 記得把這裡的 ID 換成你剛剛測試成功的「試算表 ID」
-    sheet = client.open_by_key("活動報到名單").sheet1
-    return sheet
+    # 讀取 Streamlit 雲端設定的加密金鑰 (JSON 字串轉回字典)
+    try:
+        secret_dict = json.loads(st.secrets["gcp_json"])
+        creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+        
+        # ⚠️ 【重要修改處】：請把下面這串亂碼換成你真實的「試算表 ID」
+        sheet = client.open_by_key("1Ezc7IVTQJF76pSCrZEsF2n9vW_dBEPDyYrsx2-jwZOI").sheet1
+        return sheet
+    except Exception as e:
+        st.error(f"資料庫連線失敗，請檢查金鑰設定。錯誤訊息：{e}")
+        st.stop()
 
 sheet = init_gsheets()
 
@@ -102,7 +108,6 @@ def render_list(data_frame, prefix):
                     
                     # --- 1. 更新 Google Sheets 雲端資料 ---
                     # 試算表有標題列(佔1列)，且 Pandas index 從 0 開始，所以雲端實際列數 = index + 2
-                    # 假設 C 欄(第3欄)為報到狀態，D 欄(第4欄)為報到時間
                     try:
                         sheet.update_cell(index + 2, 3, "TRUE")
                         sheet.update_cell(index + 2, 4, current_time)
