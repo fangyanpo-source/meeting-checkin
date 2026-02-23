@@ -173,10 +173,10 @@ with tab_checkin:
                         st.button("✅ 此人已完成報到", disabled=True, use_container_width=True)
 
 # ------------------------------------------
-# 分頁 B：名單管理 (預設打勾，取消勾選即撤銷)
+# 分頁 B：名單管理 (純視覺確認打勾 + 獨立撤銷按鈕)
 # ------------------------------------------
 with tab_manage:
-    st.caption("☑️ 以下為**已報到**人員。若需「撤銷報到」，請**取消勾選**右方框框。")
+    st.caption("☑️ 右方勾選框僅供**內部核對使用**（預設為空，打勾不影響雲端紀錄）。若需取消報到請點擊「✖ 撤銷」。")
     
     checked_in_df = df[df['報到狀態'] == True]
     
@@ -189,18 +189,20 @@ with tab_manage:
         st.info("目前無符合條件的已報到紀錄。")
         
     for index, row in checked_in_df.iterrows():
-        col_info, col_checkbox = st.columns([8, 2], vertical_alignment="center")
+        # 💡 將版面切分為三塊：資訊佔6份、打勾佔2份、撤銷佔2份
+        col_info, col_checkbox, col_cancel = st.columns([6, 2, 2], vertical_alignment="center")
         
         with col_info:
             st.markdown(f"**{row['姓名']}** |  {row['單位']} {row['職稱']}")
             st.caption(f"🕒 報到時間：{row['報到時間']}")
             
         with col_checkbox:
-            # 💡 預設為 True (已打勾狀態)，並隱藏標籤文字讓畫面更俐落
-            is_checked = st.checkbox("已報到", value=True, key=f"cb_status_{index}", label_visibility="collapsed")
+            # 💡 純視覺用途的勾選框 (預設為 False，不觸發任何資料庫更新)
+            st.checkbox("已確認", value=False, key=f"confirm_cb_{index}")
             
-            # 💡 當管理員將勾勾「取消」時，觸發撤銷邏輯
-            if not is_checked:
+        with col_cancel:
+            # 💡 獨立的撤銷按鈕，保留取消報到的功能
+            if st.button("✖ 撤銷", key=f"btn_cancel_{index}"):
                 try:
                     sheet.update_cell(index + 2, 4, "FALSE")
                     sheet.update_cell(index + 2, 5, "")
