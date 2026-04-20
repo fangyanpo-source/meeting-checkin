@@ -280,8 +280,11 @@ elif page == "📋 簽到管理":
         h5.caption("操作")
         st.markdown("---")
 
-        # 依原始 Excel 順序（index 順序）顯示
-        for index, row in df_full.iterrows():
+        # 僅顯示已報到人員，依原始 Excel 順序
+        df_checked = df_full[df_full["報到狀態"] == True]
+        if df_checked.empty:
+            st.info("目前尚無已報到人員。")
+        for index, row in df_checked.iterrows():
             c0, c1, c2, c3, c4, c5 = st.columns(
                 [1, 1, 2, 3, 2, 2], vertical_alignment="center"
             )
@@ -314,16 +317,10 @@ elif page == "📋 簽到管理":
                     st.markdown("🔴 未報到")
 
             with c5:
-                if not row["報到狀態"]:
-                    if st.button(
-                        "簽到", key=f"mgmt_ci_{index}", use_container_width=True, type="primary"
-                    ):
-                        do_checkin(index, row["姓名"])
-                else:
-                    if st.button(
-                        "↩ 撤銷", key=f"mgmt_undo_{index}", use_container_width=True
-                    ):
-                        do_undo(index, row["姓名"])
+                if st.button(
+                    "↩ 撤銷", key=f"mgmt_undo_{index}", use_container_width=True
+                ):
+                    do_undo(index, row["姓名"])
 
         # 批次撤銷
         if selected_indices:
