@@ -3,27 +3,19 @@ import pandas as pd
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
-import json
+import json  # 雲端讀取金鑰必備
 
 # ==========================================
 # 1. 頁面與基本設定
 # ==========================================
-st.set_page_config(page_title="會議報到工作站", page_icon="📱", layout="centered")
-
-hide_st_style = """
-            <style>
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            header {visibility: hidden;}
-            </style>
-            """
-st.markdown(hide_st_style, unsafe_allow_html=True)
+st.set_page_config(page_title="會議報到工作站", page_icon="📋", layout="wide")
 
 # ==========================================
-# 2. 連線 Google Sheets
+# 2. 連線 Google Sheets (雲端安全版)
 # ==========================================
 @st.cache_resource
-def init_gsheets():
+def init_gsheets_client():
+    """初始化並回傳 Google Sheets Spreadsheet 物件（不含特定工作表）"""
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
@@ -32,39 +24,71 @@ def init_gsheets():
         secret_dict = json.loads(st.secrets["gcp_json"])
         creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
         client = gspread.authorize(creds)
-        
-        # ⚠️ 【重要】：請替換成你的真實試算表 ID
-        sheet = client.open_by_key("1Ezc7IVTQJF76pSCrZEsF2n9vW_dBEPDyYrsx2-jwZOI").sheet1
-        return sheet
+        # ⚠️ 【重要修改處】：請把下面這串亂碼換成你真實的「試算表 ID」
+        spreadsheet = client.open_by_key("1Ezc7IVTQJF76pSCrZEsF2n9vW_dBEPDyYrsx2-jwZOI")
+        return spreadsheet
     except Exception as e:
-        st.error(f"資料庫連線失敗：{e}")
+        st.error(f"資料庫連線失敗，請檢查金鑰設定。錯誤訊息：{e}")
         st.stop()
 
-sheet = init_gsheets()
+def get_sheet(spreadsheet, session_name):
+    """依時段名稱取得對應工作表，若不存在則自動建立"""
+    try:
+        return spreadsheet.worksheet(session_name)
+    except gspread.exceptions.WorksheetNotFound:
+        # 自動建立工作表並加上標題列
+        ws = spreadsheet.add_worksheet(title=session_name, rows=200, cols=10)
+        ws.append_row(["姓名", "單位", "報到狀態", "報到時間"])
+        return ws
+
+spreadsheet = init_gsheets_client()
 
 # ==========================================
-# 3. 讀取資料
+# 2b. 側邊欄：時段選擇
 # ==========================================
-def load_data():
-    records = sheet.get_all_records()
+SESSIONS = {
+    "🌅 上午場": "上午",
+    "🌇 下午場": "下午",
+}
+
+with st.sidebar:
+    st.header("⏰ 時段選擇")
+    selected_label = st.radio(
+        "請選擇要操作的時段：",
+        options=list(SESSIONS.keys()),
+        index=0,
+    )
+    selected_session = SESSIONS[selected_label]
+
+    st.divider()
+    st.caption("每個時段對應 Google Sheets 中獨立的工作表分頁。")
+
+# 取得當前時段的工作表物件
+sheet = get_sheet(spreadsheet, selected_session)
+
+# ==========================================
+# 3. 讀取與初始化資料
+# ==========================================
+def load_data(ws):
+    """從指定工作表讀取資料"""
+    records = ws.get_all_records()
     df = pd.DataFrame(records)
-    
-    if '職稱' not in df.columns:
-        df['職稱'] = ""
     if not df.empty and '報到狀態' in df.columns:
         df['報到狀態'] = df['報到狀態'].astype(str).str.upper() == 'TRUE'
     return df
 
-if 'attendees' not in st.session_state:
-    st.session_state.attendees = load_data()
-
-df = st.session_state.attendees
+# 切換時段時重新載入資料（以 session_name 為 key 區分）
+session_key = f"attendees_{selected_session}"
+if session_key not in st.session_state:
+    st.session_state[session_key] = load_data(sheet)
 
 # ==========================================
-# 4. 頂部儀表板
+# 4. 頂部儀表板：報到統計
 # ==========================================
-st.title("📱 會議報到系統")
+st.title(f"📋 現場會議報到　｜　{selected_label}")
 
+# 計算統計數據
+df = st.session_state[session_key]
 if not df.empty:
     total_people = len(df)
     checked_in_people = df['報到狀態'].sum()
@@ -72,174 +96,72 @@ if not df.empty:
 else:
     total_people = checked_in_people = check_in_rate = 0
 
-col1, col2, col3 = st.columns(3)
-col1.metric("總人數", f"{total_people}")
-col2.metric("已報到", f"{checked_in_people}")
-col3.metric("報到率", f"{check_in_rate:.0f}%")
+col_stat1, col_stat2, col_stat3 = st.columns(3)
+col_stat1.metric("總人數", f"{total_people} 人")
+col_stat2.metric("已報到", f"{checked_in_people} 人")
+col_stat3.metric("報到率", f"{check_in_rate:.1f} %")
 
 st.divider()
 
-# 初始化搜尋欄的 Session State
-if 'search_term' not in st.session_state:
-    st.session_state.search_term = ""
+# ==========================================
+# 5. 搜尋與篩選區
+# ==========================================
+search_term = st.text_input("🔍 快速搜尋：請輸入姓名或單位", placeholder="例如：資訊部 或 王大明")
+tab1, tab2, tab3 = st.tabs(["全部名單", "⏳ 尚未報到", "✅ 已報到"])
+
+if search_term and not df.empty:
+    df = df[df['姓名'].astype(str).str.contains(search_term) | df['單位'].astype(str).str.contains(search_term)]
 
 # ==========================================
-# 5. 三大功能分頁
+# 6. 渲染名單列表函式 (含雲端寫入邏輯)
 # ==========================================
-tab_checkin, tab_manage, tab_add = st.tabs(["📱 快速報到", "📋 名單管理", "➕ 臨時新增"])
+def render_list(data_frame, prefix):
+    if data_frame.empty:
+        st.info("沒有找到符合條件的人員，或試算表目前為空。")
+        return
 
-# ------------------------------------------
-# 分頁 A：快速報到 
-# ------------------------------------------
-with tab_checkin:
-    if not df.empty:
-        def clear_search():
-            st.session_state.search_term = ""
+    for index, row in data_frame.iterrows():
+        col_info, col_action = st.columns([6, 4], vertical_alignment="center")
 
-        col_search, col_clear = st.columns([8, 2], vertical_alignment="bottom")
-        
-        with col_search:
-            search_mode = st.text_input("🔍 快速搜尋 (輸入姓名或單位)", key="search_term", placeholder="輸入關鍵字...")
-        with col_clear:
-            st.button("✖ 清除", on_click=clear_search, use_container_width=True)
-                
-        st.caption("或使用下方選單挑選：")
-        
-        if search_mode:
-            search_df = df[df['姓名'].astype(str).str.contains(search_mode) | 
-                           df['單位'].astype(str).str.contains(search_mode)]
-            
-            if search_df.empty:
-                st.warning("找不到符合的人員。")
-            else:
-                for index, row in search_df.iterrows():
-                    st.markdown(f"**{row['姓名']}** | {row['單位']} {row['職稱']}")
-                    if row['報到狀態']:
-                        st.button("✅ 已完成報到", disabled=True, key=f"s_done_{index}", use_container_width=True)
-                    else:
-                        if st.button("👉 確認簽到", type="primary", key=f"s_checkin_{index}", use_container_width=True):
-                            current_time = datetime.now().strftime("%H:%M:%S")
-                            try:
-                                sheet.update_cell(index + 2, 4, "TRUE")
-                                sheet.update_cell(index + 2, 5, current_time)
-                                st.session_state.attendees = load_data()
-                                st.toast(f"✅ {row['姓名']} 報到成功！", icon="✅")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"寫入雲端失敗：{e}")
-                    st.divider()
-        else:
-            units = sorted(df['單位'].astype(str).unique())
-            selected_unit = st.selectbox("1️⃣ 請選擇單位", options=["-- 請選擇 --"] + units)
-            
-            if selected_unit != "-- 請選擇 --":
-                unit_df = df[df['單位'] == selected_unit]
-                names = unit_df['姓名'].astype(str).tolist()
-                selected_name = st.selectbox("2️⃣ 請選擇報到人員", options=["-- 請選擇 --"] + names)
-                
-                if selected_name != "-- 請選擇 --":
-                    person_data = unit_df[unit_df['姓名'] == selected_name].iloc[0]
-                    person_index = unit_df[unit_df['姓名'] == selected_name].index[0]
-                    
-                    st.info(f"📍 目前狀態：**{'✅ 已報到' if person_data['報到狀態'] else '🔴 未報到'}**")
-                    
-                    if not person_data['報到狀態']:
-                        is_substitute = st.checkbox("🔄 換人代為出席 (修改姓名/職稱)")
-                        
-                        final_name = person_data['姓名']
-                        final_title = person_data['職稱']
-                        
-                        if is_substitute:
-                            st.caption("請輸入實際出席人員資訊，系統將自動更新名單：")
-                            final_title = st.text_input("實際出席職稱", value=person_data['職稱'])
-                            final_name = st.text_input("實際出席姓名", value=person_data['姓名'])
-                        
-                        if st.button("✅ 確認簽到", type="primary", use_container_width=True):
-                            current_time = datetime.now().strftime("%H:%M:%S")
-                            try:
-                                if is_substitute:
-                                    sheet.update_cell(person_index + 2, 2, final_title)
-                                    sheet.update_cell(person_index + 2, 3, final_name)
-                                    
-                                sheet.update_cell(person_index + 2, 4, "TRUE")
-                                sheet.update_cell(person_index + 2, 5, current_time)
-                                
-                                st.session_state.attendees = load_data()
-                                st.toast(f"✅ {final_name} 報到成功！", icon="✅")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"寫入雲端失敗：{e}")
-                    else:
-                        st.button("✅ 此人已完成報到", disabled=True, use_container_width=True)
-
-# ------------------------------------------
-# 分頁 B：名單管理 (純視覺確認打勾 + 獨立撤銷按鈕)
-# ------------------------------------------
-with tab_manage:
-    st.caption("☑️ 右方勾選框僅供**內部核對使用**（預設為空，打勾不影響雲端紀錄）。若需取消報到請點擊「✖ 撤銷」。")
-    
-    checked_in_df = df[df['報到狀態'] == True]
-    
-    search_manage = st.text_input("🔍 搜尋已報到名單", key="manage_search")
-    if search_manage:
-        checked_in_df = checked_in_df[checked_in_df['姓名'].astype(str).str.contains(search_manage) | 
-                                      checked_in_df['單位'].astype(str).str.contains(search_manage)]
-    
-    if checked_in_df.empty:
-        st.info("目前無符合條件的已報到紀錄。")
-        
-    for index, row in checked_in_df.iterrows():
-        # 💡 將版面切分為三塊：資訊佔6份、打勾佔2份、撤銷佔2份
-        col_info, col_checkbox, col_cancel = st.columns([6, 2, 2], vertical_alignment="center")
-        
         with col_info:
-            st.markdown(f"**{row['姓名']}** |  {row['單位']} {row['職稱']}")
-            st.caption(f"🕒 報到時間：{row['報到時間']}")
-            
-        with col_checkbox:
-            # 💡 純視覺用途的勾選框 (預設為 False，不觸發任何資料庫更新)
-            st.checkbox("已確認", value=False, key=f"confirm_cb_{index}")
-            
-        with col_cancel:
-            # 💡 獨立的撤銷按鈕，保留取消報到的功能
-            if st.button("✖ 撤銷", key=f"btn_cancel_{index}"):
-                try:
-                    sheet.update_cell(index + 2, 4, "FALSE")
-                    sheet.update_cell(index + 2, 5, "")
-                    st.session_state.attendees = load_data()
-                    st.toast(f"⚠️ 已撤銷 {row['姓名']} 的報到紀錄")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"撤銷失敗：{e}")
-                    
+            st.markdown(f"**{row['姓名']}** |  {row['單位']}")
+            if row['報到狀態']:
+                st.caption(f"🕒 報到時間：{row['報到時間']}")
+            else:
+                st.caption("🔴 未報到")
+
+        with col_action:
+            if not row['報到狀態']:
+                if st.button("👉 點此簽到", key=f"checkin_{prefix}_{selected_session}_{index}", use_container_width=True, type="primary"):
+                    current_time = datetime.now().strftime("%H:%M:%S")
+
+                    # --- 1. 更新 Google Sheets 雲端資料 ---
+                    # 試算表有標題列(佔1列)，且 Pandas index 從 0 開始，所以雲端實際列數 = index + 2
+                    try:
+                        sheet.update_cell(index + 2, 3, "TRUE")
+                        sheet.update_cell(index + 2, 4, current_time)
+
+                        # --- 2. 更新本地端 Session State ---
+                        st.session_state[session_key].at[index, '報到狀態'] = True
+                        st.session_state[session_key].at[index, '報到時間'] = current_time
+
+                        # 顯示成功提示並重新整理畫面
+                        st.toast(f"✅ {row['姓名']} 報到成功！已同步至雲端", icon="✅")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"寫入雲端失敗，請確認網路連線或金鑰權限。錯誤代碼：{e}")
+            else:
+                st.button("已完成", key=f"done_{prefix}_{selected_session}_{index}", disabled=True, use_container_width=True)
+
         st.divider()
 
-# ------------------------------------------
-# 分頁 C：臨時新增人員
-# ------------------------------------------
-with tab_add:
-    st.markdown("### ✍️ 現場報名登錄")
-    with st.form("add_new_attendee", clear_on_submit=True):
-        st.caption("填寫完畢送出後，系統將自動為該人員完成簽到，並新增於清單最下方。")
-        
-        new_dept = st.text_input("單位名稱*", placeholder="例如：外部單位")
-        col_new1, col_new2 = st.columns(2)
-        with col_new1:
-            new_title = st.text_input("職稱", placeholder="例如：經理")
-        with col_new2:
-            new_name = st.text_input("人員姓名*", placeholder="例如：王小明")
-            
-        submit_new = st.form_submit_button("送出並自動簽到", type="primary", use_container_width=True)
-        
-        if submit_new:
-            if new_dept.strip() and new_name.strip():
-                current_time = datetime.now().strftime("%H:%M:%S")
-                try:
-                    sheet.append_row([new_dept, new_title, new_name, "TRUE", current_time])
-                    st.session_state.attendees = load_data()
-                    st.success(f"✅ 已成功新增【{new_name}】並完成報到！")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"新增失敗：{e}")
-            else:
-                st.warning("⚠️ 單位與姓名為必填欄位！")
+# ==========================================
+# 7. 在不同頁籤中顯示對應資料
+# ==========================================
+if not df.empty:
+    with tab1:
+        render_list(df, prefix="all")
+    with tab2:
+        render_list(df[df['報到狀態'] == False], prefix="pending")
+    with tab3:
+        render_list(df[df['報到狀態'] == True], prefix="completed")
